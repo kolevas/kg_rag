@@ -1,0 +1,8 @@
+.env
+/rag_system/chroma_db/
+rag_system/macedonian_data
+requirements.txt
+__pycache__/
+research_case_outline.pdf
+mkREBEL.ipynb
+rag_system/chat_history/chroma_chat_history.py
