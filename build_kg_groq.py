@@ -20,16 +20,19 @@ load_dotenv()
 class GroqTripleExtractor:
     """Use Groq (Llama 3) to extract triples from Macedonian text."""
     
+    MODEL = "llama-3.3-70b-versatile"
+    MAX_TOKENS = 800
+    TEMPERATURE = 0.3
+    
     def __init__(self):
         """Initialize Groq client."""
-        print(f"🔄 Initializing Groq (Llama 3)...")
+        print(f"🔄 Initializing Groq...")
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise ValueError("GROQ_API_KEY not found in environment")
         
         self.client = Groq(api_key=api_key)
-        self.model = "llama-3.3-70b-versatile"
-        print(f"✅ Groq initialized: {self.model}")
+        print(f"✅ Groq initialized: {self.MODEL}")
     
     def extract_triples(self, text: str) -> List[Tuple[str, str, str]]:
         """Extract knowledge triples from Macedonian text using Groq."""
@@ -50,7 +53,7 @@ Macedonian Text: {text}
 Provide triples in the format:
 subject | relation | object
 
-Relations should be simple and standardized (e.g., "teaches", "is_a", "contains", "uses", "belongs_to", "has_component", "requires", "implements").
+Relations should be simple, standardized (e.g., "teaches", "is_a", "contains", "uses", "belongs_to", "has_component", "requires", "implements") and in Macedonian.
 Keep entity names in their original form (Macedonian or English technical terms).
 Extract as many relevant triples as possible (aim for 5-15 per chunk).
 
@@ -59,9 +62,9 @@ Triples:"""
         try:
             response = self.client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model=self.model,
-                max_tokens=800,
-                temperature=0.3
+                model=self.MODEL,
+                max_tokens=self.MAX_TOKENS,
+                temperature=self.TEMPERATURE
             )
             
             result = response.choices[0].message.content
@@ -96,6 +99,9 @@ Triples:"""
 
 class KnowledgeGraphBuilderGroq:
     """Build knowledge graph using Groq extraction."""
+    
+    CHUNK_SIZE = 1000
+    MAX_PAGES = 10
     
     def __init__(self):
         """Initialize components."""
@@ -176,44 +182,19 @@ class KnowledgeGraphBuilderGroq:
         """Extract text from PDF."""
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                text_parts = []
-                for page in pdf.pages[:10]:  # First 10 pages
-                    text = page.extract_text()
-                    if text:
-                        text_parts.append(text)
-                return "\n".join(text_parts)
+                return "\n".join(page.extract_text() or "" 
+                               for page in pdf.pages[:self.MAX_PAGES])
         except Exception as e:
             print(f"    ⚠️  PDF extraction error: {e}")
             return ""
     
-    def _split_text(self, text: str, chunk_size: int = 1000) -> List[str]:
+    def _split_text(self, text: str, chunk_size: int = None) -> List[str]:
         """Split text into chunks."""
         if not text:
             return []
-        
-        # Clean text
+        chunk_size = chunk_size or self.CHUNK_SIZE
         text = re.sub(r'\s+', ' ', text).strip()
-        
-        # Split by sentences/paragraphs
-        chunks = []
-        words = text.split()
-        
-        current_chunk = []
-        current_size = 0
-        
-        for word in words:
-            current_chunk.append(word)
-            current_size += len(word) + 1
-            
-            if current_size >= chunk_size:
-                chunks.append(' '.join(current_chunk))
-                current_chunk = []
-                current_size = 0
-        
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
-        
-        return chunks
+        return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
     
     def _save_graph(self):
         """Save graph and triples."""
