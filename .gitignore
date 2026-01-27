@@ -10,3 +10,4 @@ rag_system/chat_history/chroma_chat_history.py
 lib
 rag_system/knowledge_graph_groq
 kg_groq_visualization.html
+rag_system/knowledge_graph
