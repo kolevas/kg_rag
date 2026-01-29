@@ -1,7 +1,7 @@
 from huggingface_hub import InferenceClient
 import deepl
 # Use package-qualified imports so the module can be imported from the app root
-from rag_system.preprocessing.document_reader import DocumentReader
+from preprocessing.document_reader import DocumentReader
 import os
 import json
 import re
@@ -16,8 +16,8 @@ class MacedonianChatBot:
     def __init__(self, user_id="default_user"):
         self.user_id = user_id
         self.project_id = "1"
-        self.reader = DocumentReader(chroma_db_path="./rag_system/chroma_db")
-        from rag_system.chat_history.mongo_chat_history import MongoDBChatHistoryManager
+        self.reader = DocumentReader(chroma_db_path="./chroma_db")
+        from chat_history.mongo_chat_history import MongoDBChatHistoryManager
         self.chat_manager = MongoDBChatHistoryManager(db_name="chat_history_db", collection_name="conversations")
         self.session_id = self._initialize_session()
         
@@ -119,7 +119,7 @@ class MacedonianChatBot:
 
     def _initialize_chat_manager(self):
         """Initialize the MongoDB chat history manager only."""
-        from rag_system.chat_history.mongo_chat_history import MongoDBChatHistoryManager
+        from chat_history.mongo_chat_history import MongoDBChatHistoryManager
         return MongoDBChatHistoryManager(
             db_name="chat_history_db", collection_name="conversations"
         )
