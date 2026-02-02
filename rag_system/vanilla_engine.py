@@ -1,6 +1,7 @@
 from huggingface_hub import InferenceClient
 # Use package-qualified imports so the module can be imported from the app root
 from rag_system.preprocessing.document_reader import DocumentReader
+from rag_system.kg_retriever import KnowledgeGraphRetriever
 import os
 import json
 import re
@@ -19,6 +20,15 @@ class DocumentChatBot:
         from rag_system.chat_history.mongo_chat_history import MongoDBChatHistoryManager
         self.chat_manager = MongoDBChatHistoryManager(db_name="chat_history_db", collection_name="conversations")
         self.session_id = self._initialize_session()
+        
+        # Initialize Knowledge Graph Retriever
+        print("Initializing Knowledge Graph Retriever...")
+        try:
+            self.kg_retriever = KnowledgeGraphRetriever(kg_path="./rag_system/knowledge_graph")
+            print("✅ Knowledge Graph loaded successfully")
+        except Exception as e:
+            print(f"⚠️ Could not initialize Knowledge Graph: {e}")
+            self.kg_retriever = None
         
         # Initialize Hugging Face Inference API client
         print("Initializing Hugging Face Inference API client...")
@@ -95,8 +105,27 @@ class DocumentChatBot:
         print(f"Using {len(retrieved_content[:10])} document chunks")
         return context_string
     
-    def _build_system_message(self, context_string: str, history_text: str = "") -> str:
+    def _get_kg_context(self, query: str) -> str:
+        """Retrieve and process knowledge graph context."""
+        if not self.kg_retriever:
+            return ""
+        
+        try:
+            print("Retrieving from knowledge graph...")
+            kg_context = self.kg_retriever.retrieve_kg_context(query, max_triples=8)
+            if kg_context:
+                print(f"✅ Retrieved KG context")
+            return kg_context
+        except Exception as e:
+            print(f"⚠️ Error retrieving KG context: {e}")
+            return ""
+    
+    def _build_system_message(self, context_string: str, kg_context: str = "", history_text: str = "") -> str:
         """Build the system message for the LLM."""
+        
+        combined_context = context_string
+        if kg_context:
+            combined_context = f"{kg_context}\n\n{context_string}"
         
         return f"""You are a knowledgeable AI assistant that can answer questions about literature, science, and various other topics. 
                 When answering:
@@ -118,7 +147,7 @@ class DocumentChatBot:
                 - Stick to the provided guideline and format
                 - If the question is vague or ambiguous, ask for clarification
                 Context:
-                {context_string}
+                {combined_context}
                 History:
                 {history_text}
                 If by any chance you find conflicting information in the context, use the most recent information to answer the question."""
@@ -239,6 +268,7 @@ class DocumentChatBot:
         print(f"Document Chat Bot initialized!")
         print(f"Storage: MongoDB")
         print(f"LLM: Mistral-7B (Hugging Face Inference API)")
+        print(f"Retrieval: Documents + Knowledge Graph")
         print("Commands: 'quit'")
         print("-" * 60)
         try:
@@ -248,15 +278,16 @@ class DocumentChatBot:
                     continue
                 try:
                     print(f"\n🔍 Processing: '{query}'")
-                    # Get conversation history and document context
+                    # Get conversation history, document context, and KG context
                     relevant_history = self._get_conversation_history(query)
                     context_string = self._get_document_context(query)
+                    kg_context = self._get_kg_context(query)
                     # Prepare context for LLM
                     history_text = ""
                     if relevant_history:
                         history_text = f"\n\nRelevant Context:\n{relevant_history}"
                     # Generate and display response
-                    system_message = self._build_system_message(context_string, history_text)
+                    system_message = self._build_system_message(context_string, kg_context, history_text)
                     response = self._generate_response(query, system_message)
                     print("\nResponse:")
                     print(response)
