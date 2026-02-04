@@ -1,8 +1,8 @@
 from huggingface_hub import InferenceClient
 import deepl
-# Use package-qualified imports so the module can be imported from the app root
-from rag_system.preprocessing.document_reader import DocumentReader
-from rag_system.kg_retriever import KnowledgeGraphRetriever
+# Use relative imports for running from rag_system directory
+from preprocessing.document_reader import DocumentReader
+from kg_retriever import KnowledgeGraphRetriever
 import os
 import json
 import re
@@ -18,14 +18,14 @@ class MacedonianChatBot:
         self.user_id = user_id
         self.project_id = "1"
         self.reader = DocumentReader(chroma_db_path="./chroma_db")
-        from rag_system.chat_history.mongo_chat_history import MongoDBChatHistoryManager
+        from chat_history.mongo_chat_history import MongoDBChatHistoryManager
         self.chat_manager = MongoDBChatHistoryManager(db_name="chat_history_db", collection_name="conversations")
         self.session_id = self._initialize_session()
         
         # Initialize Knowledge Graph Retriever
         print("Initializing Knowledge Graph Retriever...")
         try:
-            self.kg_retriever = KnowledgeGraphRetriever(kg_path="./rag_system/knowledge_graph")
+            self.kg_retriever = KnowledgeGraphRetriever(kg_path="./knowledge_graph")
             print("✅ Knowledge Graph loaded successfully")
         except Exception as e:
             print(f"⚠️ Could not initialize Knowledge Graph: {e}")
@@ -129,7 +129,7 @@ class MacedonianChatBot:
 
     def _initialize_chat_manager(self):
         """Initialize the MongoDB chat history manager only."""
-        from rag_system.chat_history.mongo_chat_history import MongoDBChatHistoryManager
+        from chat_history.mongo_chat_history import MongoDBChatHistoryManager
         return MongoDBChatHistoryManager(
             db_name="chat_history_db", collection_name="conversations"
         )
@@ -175,6 +175,7 @@ class MacedonianChatBot:
         
         context_string = "\n".join(retrieved_content[:10])  # Use top 10 chunks
         print(f"Using {len(retrieved_content[:10])} document chunks")
+        print(context_string)
         return context_string
     
     def _get_kg_context(self, query: str) -> str:
@@ -187,6 +188,7 @@ class MacedonianChatBot:
             kg_context = self.kg_retriever.retrieve_kg_context(query, max_triples=8)
             if kg_context:
                 print(f"✅ Retrieved KG context")
+                print(kg_context)
             return kg_context
         except Exception as e:
             print(f"⚠️ Error retrieving KG context: {e}")
