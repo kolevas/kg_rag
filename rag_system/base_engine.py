@@ -4,7 +4,7 @@ import os
 import json
 import re
 from dotenv import load_dotenv
-from rag_system.preprocessing.simplified_document_reader import DocumentReader
+from preprocessing.simplified_document_reader import DocumentReader
 from chat_history.mongo_chat_history import MongoDBChatHistoryManager
 from kg_retriever import KnowledgeGraphRetriever
 

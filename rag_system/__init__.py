@@ -1,13 +1,3 @@
-"""
-RAG System Package
-
-This package contains components for Retrieval-Augmented Generation including:
-- LlamaIndex integration
-- Document preprocessing
-- Chat history management
-- Vector storage with ChromaDB
-"""
-
 try:
     from .token_utils import TokenUtils
 except ImportError as e:
