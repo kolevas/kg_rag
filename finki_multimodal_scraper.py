@@ -8,6 +8,9 @@ Downloads PDFs, presentations, and other materials in original format
 import requests
 from bs4 import BeautifulSoup
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 import time
 import re
 from urllib.parse import urljoin, urlparse
@@ -33,9 +36,12 @@ class FINKICourseScraper:
             "https://oldcourses.finki.ukim.mk/course/view.php?id=2709"
         ]
         
-        # Authentication credentials
-        self.username = "223001"
-        self.password = "lj29sn04ne16@SK"
+        # Authentication credentials (loaded from environment variables)
+        self.username = os.getenv("FINKI_USERNAME", "")
+        self.password = os.getenv("FINKI_PASSWORD", "")
+        if not self.username or not self.password:
+            print("⚠️ FINKI_USERNAME and FINKI_PASSWORD not found in environment variables.")
+            print("Please add them to the .env file.")
         
         # Create output directory structure
         os.makedirs(self.output_dir, exist_ok=True)

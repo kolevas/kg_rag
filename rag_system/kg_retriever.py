@@ -1,14 +1,9 @@
-
+"""Re-implement retrieval methods to better leverage the structure of the knowledge graph and improve relevance of retrieved triples."""
 import json
 import networkx as nx
 from pathlib import Path
-from typing import List, Dict, Set, Tuple, Optional
+from typing import List, Dict
 from collections import deque
-import re
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
 
 class KnowledgeGraphRetriever:
     
@@ -25,25 +20,16 @@ class KnowledgeGraphRetriever:
         self._load_kg()
     
     def _load_kg(self):
-        """Load knowledge graph from files."""
         try:
-            # Try to load unified KG first, then fall back to flores
-            graphml_files = [
-                self.kg_path / "kg_unified.graphml",
-                self.kg_path / "kg_flores.graphml"
-            ]
+            graphml_files = [ self.kg_path / "kg_unified.graphml",self.kg_path / "kg_flores.graphml"]
             
             for graphml_file in graphml_files:
                 if graphml_file.exists():
                     self.graph = nx.read_graphml(graphml_file)
-                    print(f"✅ Loaded KG from {graphml_file}")
+                    print(f"Loaded KG from {graphml_file}")
                     break
             
-            # Load triples JSON (try unified first)
-            triples_files = [
-                self.kg_path / "triples_kg_unified.json",
-                self.kg_path / "triples_flores.json"
-            ]
+            triples_files = [self.kg_path / "triples_kg_unified.json",self.kg_path / "triples_flores.json"]
             
             for triples_file in triples_files:
                 if triples_file.exists():
@@ -51,30 +37,26 @@ class KnowledgeGraphRetriever:
                         triples_data = json.load(f)
                         self.triples = triples_data
                         
-                        # Extract entities and relations
                         for triple in triples_data:
                             self.entities.add(triple['subject'].lower())
                             self.entities.add(triple['object'].lower())
                             self.relations.add(triple['relation'].lower())
                     
-                    print(f"✅ Loaded {len(self.triples)} triples from {triples_file}")
-                    print(f"   - {len(self.entities)} unique entities")
-                    print(f"   - {len(self.relations)} unique relations")
+                    print(f"Loaded {len(self.triples)} triples from {triples_file}")
                     break
             
             if self.graph is None:
-                print("⚠️ GraphML file not found, creating graph from triples...")
+                print("GraphML file not found, creating graph from triples")
                 self._build_graph_from_triples()
         
         except Exception as e:
-            print(f"❌ Error loading KG: {e}")
+            print(f"Error loading KG: {e}")
             self.graph = nx.MultiDiGraph()
             self.triples = []
             self.entities = set()
             self.relations = set()
     
     def _build_graph_from_triples(self):
-        """Build NetworkX graph from triples."""
         self.graph = nx.MultiDiGraph()
         
         for triple in self.triples:

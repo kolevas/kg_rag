@@ -1,12 +1,10 @@
 import os
-import json
 import re 
 from pathlib import Path
 from typing import List, Dict, Any, Union, Optional
 import chromadb
 from chromadb.utils import embedding_functions
-import tiktoken 
-from .preprocess_pdf_files import split_text_into_chunks
+from .text_utils import split_text_into_chunks
 
 class DocumentReader:
     def __init__(self, chroma_db_path="./chroma_db2"):

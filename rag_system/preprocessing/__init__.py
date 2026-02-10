@@ -11,15 +11,16 @@ except ImportError as e:
     print(f"⚠️  Could not import DocumentReader: {e}")
     DocumentReader = None
 
-try:
-    from .old_document_classifier import DocumentClassifier
-except ImportError as e:
-    print(f"⚠️  Could not import DocumentClassifier: {e}")
-    DocumentClassifier = None
+from .text_utils import (
+    clean_text,
+    split_text_into_chunks,
+    normalize_chunk,
+)
 
 
 __all__ = [
     'DocumentReader',
-    'DocumentClassifier',
-    'DocumentIngester'
+    'clean_text',
+    'split_text_into_chunks',
+    'normalize_chunk',
 ]
