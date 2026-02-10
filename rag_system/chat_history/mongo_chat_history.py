@@ -1,140 +1,90 @@
-"""Needs checking and reimplementation of methods that use openai clients"""
-from pymongo import MongoClient
+import uuid
 import time
+import re
+import os
 from typing import List, Dict, Optional
 from datetime import datetime
-import os
-from dotenv import load_dotenv
-from token_utils import count_tokens
-from openai import AzureOpenAI
-import re
+
 import numpy as np
+from pymongo import MongoClient
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from dotenv import load_dotenv
+from huggingface_hub import InferenceClient
+from token_utils import count_tokens
 
 load_dotenv()
 
+_NORMALIZE_PIPELINE = [
+    (re.compile(r"\[\[\d+\]\],?\s*"), ""),                      
+    (re.compile(r"\n\s*#{1,6}\s*([^\n]+)"), r". \1:"),           
+    (re.compile(r"\n\s*-\s*\*\*([^*]+)\*\*:\s*"), r". \1: "),  
+    (re.compile(r"\n\s*-\s*"), ". "),                            
+    (re.compile(r"\*{1,2}([^*]+)\*{1,2}"), r"\1"),           
+    (re.compile(r"\n+"), ". "),                             
+    (re.compile(r"\.[\s.]+"), ". "),                           
+    (re.compile(r":\s*\."), ":"),                               
+    (re.compile(r"\.\s*:"), ":"),                          
+    (re.compile(r"\s+"), " "),                                  
+    (re.compile(r"\s*([.,:;!?])"), r"\1"),                   
+    (re.compile(r"([.,:;!?])(?!\s)"), r"\1 "),         
+    (re.compile(r"\.\s*([a-z])"), lambda m: ". " + m.group(1).upper()),
+    (re.compile(r"(\d+)\.\s+(\d+)"), r"\1.\2"),                
+]
+
+
 class MongoDBChatHistoryManager:
+
+    def __init__(self, mongo_uri=None, db_name="chat_history_db", collection_name="conversations"):
+        self.mongo_uri = mongo_uri or os.getenv('MONGODB_URI', 'mongodb://localhost:27017')
+        self.client = MongoClient(self.mongo_uri)
+        self.db = self.client[db_name]
+        self.collection = self.db[collection_name]
+
+        hf_token = os.getenv("HUGGINGFACE_TOKEN")
+        self.hf_client = InferenceClient(token=hf_token) if hf_token else None
+        self.model_name = "mistralai/Mistral-7B-Instruct-v0.2"
+
+        # Verify connection
+        self.client.admin.command('ping')
+
+        # Create indexes for query performance
+        self.collection.create_index([("session_id", 1), ("timestamp", -1)])
+        self.collection.create_index([("session_id", 1), ("type", 1)])
+        self.collection.create_index([("timestamp", -1)])
+
     def create_session(self, user_id, project_id, title=None):
-        import uuid, time
         session_id = str(uuid.uuid4())
         session = {
             "session_id": session_id,
             "user_id": user_id,
             "project_id": project_id,
             "created_at": time.time(),
-            "title": title or f"Session {session_id}"
+            "title": title or f"Session {session_id}",
         }
-        self.save_session(session)
+        self.db['sessions'].insert_one(session)
         return session
-    # --- Session Management Methods ---
-    def save_session(self, session_dict):
-        self.db['sessions'].insert_one(session_dict)
 
     def get_sessions(self, user_id, project_id):
-        sessions = list(self.db['sessions'].find({'user_id': user_id, 'project_id': project_id}))
-        return sessions
+        return list(self.db['sessions'].find({'user_id': user_id, 'project_id': project_id}))
 
     def get_session(self, session_id, user_id, project_id):
-        session = self.db['sessions'].find_one({'session_id': session_id, 'user_id': user_id, 'project_id': project_id})
-        return session
+        return self.db['sessions'].find_one({
+            'session_id': session_id, 'user_id': user_id, 'project_id': project_id
+        })
 
     def delete_session(self, session_id, user_id, project_id):
-        self.db['sessions'].delete_one({'session_id': session_id, 'user_id': user_id, 'project_id': project_id})
-    def __init__(self, mongo_uri=None, db_name="chat_history_db", collection_name="conversations"):
-        self.mongo_uri = mongo_uri or os.getenv('MONGODB_URI', 'mongodb://localhost:27017')
-        self.db_name = db_name
-        self.collection_name = collection_name
-        
-        self.client = MongoClient(self.mongo_uri)
-        self.db = self.client[self.db_name]
-        self.collection = self.db[self.collection_name]
-        
-        try:
-            self.openai_client = AzureOpenAI(
-                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                api_version=os.getenv("AZURE_OPENAI_API_VERSION")
-            )
-        except Exception as e:
-            self.openai_client = None
-        
-        # Test connection and setup
-        self._test_connection()
-        self._setup_collection()
-    
-    def _test_connection(self):
-        """Test MongoDB connection"""
-        try:
-            self.client.admin.command('ping')
-        except Exception as e:
-            raise
-    
-    def _setup_collection(self):
-        """Setup collection with proper indexes"""
-        try:
-            # Create indexes for better performance
-            self.collection.create_index([("session_id", 1), ("timestamp", -1)])
-            self.collection.create_index([("session_id", 1), ("type", 1)])
-            self.collection.create_index([("timestamp", -1)])
-            
-        except Exception as e:
-            pass  # Silently ignore index creation errors
-   
-    def _normalize_conversation(self, query: str, response: str) -> str:
-        normalized_response = re.sub(r"\[\[\d+\]\],?\s*", "", response)
-        normalized_response = re.sub(r"\n\s*#{1,6}\s*([^\n]+)", r". \1:", normalized_response)
-        normalized_response = re.sub(r"\n\s*-\s*\*\*([^*]+)\*\*:\s*", r". \1: ", normalized_response)
-        normalized_response = re.sub(r"\n\s*-\s*", ". ", normalized_response)
-        normalized_response = re.sub(r"\*\*([^*]+)\*\*", r"\1", normalized_response)
-        normalized_response = re.sub(r"\*([^*]+)\*", r"\1", normalized_response)
-        normalized_response = re.sub(r"\n{3,}", "\n\n", normalized_response)
-        normalized_response = re.sub(r"\n\n", ". ", normalized_response)
-        normalized_response = re.sub(r"\n", " ", normalized_response)
-        normalized_response = re.sub(r"\.+", ".", normalized_response)
-        normalized_response = re.sub(r"\s*\.\s*\.", ".", normalized_response)
-        normalized_response = re.sub(r":\s*\.", ":", normalized_response)
-        normalized_response = re.sub(r"\.\s*:", ":", normalized_response)
-        normalized_response = re.sub(r"\s+", " ", normalized_response)
-        normalized_response = re.sub(r"\s*([.,:;!?])", r"\1", normalized_response)
-        normalized_response = re.sub(r"([.,:;!?])\s*", r"\1 ", normalized_response)
-        normalized_response = re.sub(r"\.\s*([a-z])", lambda m: ". " + m.group(1).upper(), normalized_response)
-        normalized_response = re.sub(r"(\d+)\.\s+(\d+)", r"\1.\2", normalized_response)
-        normalized_response = normalized_response.strip()
-        if normalized_response and not normalized_response[0].isupper():
-            normalized_response = normalized_response[0].upper() + normalized_response[1:]
-        if normalized_response and normalized_response[-1] not in '.!?':
-            normalized_response += "."
-        return normalized_response
-    
-    def _summarize_conversation(self, query: str, response: str) -> str:
-        """Summarize conversation using OpenAI model"""
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": """You are an expert at creating concise summaries while preserving ALL important information. Create a summary that: 
-                        1) Retains all key facts, numbers, data points, and specific details 
-                        2) Maintains the logical flow of the conversation 
-                        3) Targets 60% of original length while preserving 100% of factual content 
-                        4) Returns clean text without markdown and new lines (don't add \n)
-                        5) Prioritizes factual accuracy over brevity"""}, 
-                    {"role": "user", "content": f"Please summarize this conversation:\nUser: {query}\nAssistant: {response}"}
-                ],
-                max_tokens=500,
-                temperature=0.3,
-                timeout=30
-            )
-            summary = response.choices[0].message.content.strip()
-            if summary and len(summary) > 10:
-                return summary
-        except Exception as e:
-            return self._normalize_conversation(query, response)
+        self.db['sessions'].delete_one({
+            'session_id': session_id, 'user_id': user_id, 'project_id': project_id
+        })
+
     def add_conversation(self, query: str, response: str, session_id: str, timestamp: float = None):
-        """Add a conversation pair to history for a specific session"""
-        if timestamp is None:
-            timestamp = time.time()
-            
+        timestamp = timestamp or time.time()
+        summary = (
+            self._summarize_conversation(query, response)
+            if self.hf_client
+            else self._normalize_conversation(query, response)
+        )
         document = {
             "_id": f"{session_id}_conv_{int(timestamp * 1000)}",
             "query": query,
@@ -143,156 +93,112 @@ class MongoDBChatHistoryManager:
             "timestamp": timestamp,
             "datetime": datetime.fromtimestamp(timestamp),
             "type": "conversation",
-            "summary": self._summarize_conversation(query, response) if self.openai_client else self._normalize_conversation(query, response)
+            "summary": summary,
         }
-        
-        try:
-            self.collection.replace_one(
-                {"_id": document["_id"]},
-                document,
-                upsert=True
-            )
-        except Exception as e:
-            raise
+        self.collection.replace_one({"_id": document["_id"]}, document, upsert=True)
 
-    def find_most_relevant_conversation(self, current_query: str, session_id: str, n_results: int = 5, max_tokens: int = 2000) -> Optional[str]:
-        """Find the most relevant conversations using only the hybrid approach."""
-        conversations = self.get_hybrid_conversations(current_query, session_id, n_results, max_tokens)
-        if not conversations:
-            return None
-        context_parts = []
+    def get_conversation(self, session_id: str) -> List[tuple]:
+        conversations = list(self.collection.find(
+            {"session_id": session_id, "type": "conversation"}
+        ).sort("timestamp", 1))
+        messages = []
         for conv in conversations:
-            context_parts.append(f"[CONVERSATION] {conv.get('summary', '')}")
-        return "\n".join(context_parts)
-
-    def get_hybrid_conversations(self, current_query: str, session_id: str, n_results: int = 5, max_tokens: int = 3000) -> List[Dict]: 
-        """
-        Simplified hybrid approach: 30% recent, 70% similarity-based retrieval
-        """
-        try:
-            # Check if conversations exist
-            total_conversations = self.collection.count_documents({"session_id": session_id, "type": "conversation"})
-            if total_conversations == 0:
-                return []
-            
-            # Simple 30/70 split
-            recent_tokens = int(max_tokens * 0.3)
-            similarity_tokens = int(max_tokens * 0.7)
-            
-            # Get recent and similar conversations
-            recent_conversations = self._get_recent_conversations_for_hybrid(session_id, recent_tokens)
-            similarity_conversations = self._get_similarity_conversations(current_query, session_id, similarity_tokens, recent_conversations)
-            
-            # Combine without duplicates
-            combined_conversations = recent_conversations.copy()
-            recent_ids = {conv.get('_id', '') for conv in recent_conversations}
-            
-            for conv in similarity_conversations:
-                if conv.get('_id', '') not in recent_ids:
-                    combined_conversations.append(conv)
-            
-            return combined_conversations
-            
-        except Exception as e:
-            return []
-    
-    def _get_recent_conversations_for_hybrid(self, session_id: str, max_tokens: int) -> List[Dict]:
-        """Get recent conversations within token limit"""
-        try:
-            conversations = list(self.collection.find(
-                {"session_id": session_id, "type": "conversation"}
-            ).sort("timestamp", -1).limit(10))
-            
-            result = []
-            total_tokens = 0
-            
-            for conv in conversations:
-                summary_tokens = count_tokens(conv.get('summary', ''))
-                if total_tokens + summary_tokens <= max_tokens:
-                    result.append({
-                        '_id': conv.get('_id'),
-                        'summary': conv.get('summary', ''),
-                        'timestamp': conv['timestamp'],
-                        'source': 'recent'
-                    })
-                    total_tokens += summary_tokens
-                else:
-                    break
-            
-            return result
-            
-        except Exception as e:
-            return []
-    
-    def _get_similarity_conversations(self, current_query: str, session_id: str, max_tokens: int, exclude_conversations: List[Dict]) -> List[Dict]:
-        """Simplified: Get most similar conversations to current query using TF-IDF cosine similarity."""
-        try:
-            all_convs = list(self.collection.find({"session_id": session_id, "type": "conversation"}).sort("timestamp", -1))
-            excluded_ids = {conv.get('_id', '') for conv in exclude_conversations}
-            candidates = [conv for conv in all_convs if conv.get('_id', '') not in excluded_ids]
-            if not candidates:
-                return []
-            texts = [f"{conv['query']} {conv['response']}" for conv in candidates]
-            vectorizer = TfidfVectorizer(stop_words='english', max_features=300)
-            tfidf = vectorizer.fit_transform([current_query] + texts)
-            sims = cosine_similarity(tfidf[0:1], tfidf[1:])[0]
-            sorted_idx = np.argsort(sims)[::-1]
-            result, total_tokens = [], 0
-            for idx in sorted_idx:
-                conv = candidates[idx]
-                summary = conv.get('summary', '')
-                tokens = count_tokens(summary)
-                if total_tokens + tokens > max_tokens:
-                    break
-                result.append({
-                    '_id': conv.get('_id'),
-                    'summary': summary,
-                    'timestamp': conv['timestamp'],
-                    'similarity_score': float(sims[idx]),
-                    'source': 'similarity'
-                })
-                total_tokens += tokens
-            return result
-        except Exception as e:
-            return []
+            messages.append(("user", conv.get("query", "")))
+            messages.append(("bot", conv.get("response", "")))
+        return messages
 
     def clear_history(self, session_id: str = None):
-        """Clear chat history for a session or all if session_id is None"""
-        try:
-            if session_id:
-                self.collection.delete_many({"session_id": session_id})
-            else:
-                self.collection.delete_many({})
-        except Exception as e:
-            print(f"Error clearing history: {e}")
- 
-    def get_conversation(self, session_id: str) -> List[tuple]:
-        """Get all conversations for a session as a list of (role, content) tuples"""
-        try:
-            conversations = list(self.collection.find(
-                {"session_id": session_id, "type": "conversation"}
-            ).sort("timestamp", 1))
-            
-            messages = []
-            for conv in conversations:
-                messages.append(("user", conv.get("query", "")))
-                messages.append(("bot", conv.get("response", "")))
-            
-            return messages
-            
-        except Exception as e:
+        query = {"session_id": session_id} if session_id else {}
+        self.collection.delete_many(query)
+
+    def find_most_relevant_conversation(
+        self, current_query: str, session_id: str,
+        n_results: int = 5, max_tokens: int = 2000,
+    ) -> Optional[str]:
+        all_convs = list(self.collection.find(
+            {"session_id": session_id, "type": "conversation"}
+        ).sort("timestamp", -1))
+        if not all_convs:
+            return None
+
+        recent_tokens = int(max_tokens * 0.3)
+        similarity_tokens = int(max_tokens * 0.7)
+
+        recent, used_ids, tokens_used = [], set(), 0
+        for conv in all_convs:
+            t = count_tokens(conv.get('summary', ''))
+            if tokens_used + t > recent_tokens:
+                break
+            recent.append(conv)
+            used_ids.add(conv['_id'])
+            tokens_used += t
+
+        candidates = [c for c in all_convs if c['_id'] not in used_ids]
+        similar = self._rank_by_similarity(current_query, candidates, similarity_tokens)
+
+        parts = [f"[CONVERSATION] {c.get('summary', '')}" for c in recent + similar]
+        return "\n".join(parts) if parts else None
+
+    def _rank_by_similarity(
+        self, query: str, candidates: List[Dict], max_tokens: int,
+    ) -> List[Dict]:
+        if not candidates:
             return []
-    
+        texts = [f"{c['query']} {c['response']}" for c in candidates]
+        tfidf = TfidfVectorizer(stop_words='english', max_features=300).fit_transform([query] + texts)
+        scores = cosine_similarity(tfidf[0:1], tfidf[1:])[0]
+
+        result, tokens_used = [], 0
+        for idx in np.argsort(scores)[::-1]:
+            t = count_tokens(candidates[idx].get('summary', ''))
+            if tokens_used + t > max_tokens:
+                break
+            result.append(candidates[idx])
+            tokens_used += t
+        return result
+
+    def _normalize_conversation(self, query: str, response: str) -> str:
+        """Strip markdown and clean response into plain-text sentences."""
+        text = response
+        for pattern, repl in _NORMALIZE_PIPELINE:
+            text = pattern.sub(repl, text)
+        text = text.strip()
+        if text and not text[0].isupper():
+            text = text[0].upper() + text[1:]
+        if text and text[-1] not in '.!?':
+            text += "."
+        return text
+
+    def _summarize_conversation(self, query: str, response: str) -> str:
+        """Summarize a conversation turn via the HuggingFace Inference API."""
+        try:
+            result = self.hf_client.chat_completion(
+                model=self.model_name,
+                messages=[{"role": "user", "content": (
+                    "You are an expert at creating concise summaries while preserving ALL important information. "
+                    "Create a summary that: "
+                    "1) Retains all key facts, numbers, data points, and specific details. "
+                    "2) Maintains the logical flow of the conversation. "
+                    "3) Targets 60% of original length while preserving 100% of factual content. "
+                    "4) Returns clean text without markdown and new lines. "
+                    "5) Prioritizes factual accuracy over brevity.\n\n"
+                    f"Please summarize this conversation:\nUser: {query}\nAssistant: {response}"
+                )}],
+                max_tokens=500,
+                temperature=0.3,
+            )
+            summary = result.choices[0].message.content.strip()
+            if summary and len(summary) > 10:
+                return summary
+        except Exception:
+            pass
+        return self._normalize_conversation(query, response)
+
     def close(self):
-        """Close MongoDB connection"""
         try:
             self.client.close()
-        except Exception as e:
-            pass  # Silently ignore close errors
-    
-    def __del__(self):
-        """Destructor to ensure connection is closed"""
-        try:
-            self.close()
-        except:
+        except Exception:
             pass
+
+    def __del__(self):
+        self.close()
