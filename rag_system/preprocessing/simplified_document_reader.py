@@ -333,7 +333,11 @@ class DocumentReader:
                        n_results: int = 10) -> List[str]:
         """Query documents from ChromaDB collection."""
         try:
-            collection = self.client.get_collection(name=collection_name)
+            # Use get_or_create to handle missing collections gracefully
+            collection = self.client.get_or_create_collection(
+                name=collection_name,
+                embedding_function=self.default_embedding_function
+            )
             
             results = collection.query(
                 query_texts=[query],
